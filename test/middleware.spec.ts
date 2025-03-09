@@ -1,29 +1,33 @@
 /* eslint-env mocha */
 import { defaultLogger } from '@libp2p/logger'
 import { expect } from 'aegir/chai'
+import { Wallet, ethers, id, verifyMessage } from 'ethers'
+import { EVMRuleEngine, addressIsEOA, walletBalance, type EngineConfig } from 'evm-rule-engine'
 import { lpStream } from 'it-length-prefixed-stream'
 import { duplexPair } from 'it-pair/duplex'
 import sinon from 'sinon'
 import { stubInterface, type StubbedInstance } from 'sinon-ts'
 import { fromString } from 'uint8arrays/from-string'
 import { TIMEOUT } from '../src/constants.js'
-import { MiddlewareChallengeResponse } from '../src/middleware-challenge-response.js'
-import type { ComponentLogger } from '@libp2p/interface'
+import { MiddlewareEVM } from '../src/middleware-evm.js'
+import type { ComponentLogger, PeerId } from '@libp2p/interface'
 import type { ConnectionManager, Registrar } from '@libp2p/interface-internal'
 
-interface StubbedMiddlewareChallengeResponseComponents {
+interface StubbedMiddlewareEVMComponents {
   registrar: StubbedInstance<Registrar>
   connectionManager: StubbedInstance<ConnectionManager>
   logger: ComponentLogger
+  peerId: StubbedInstance<PeerId>
 }
 
 describe('Challenge Response Middleware', () => {
-  let components: StubbedMiddlewareChallengeResponseComponents
+  let components: StubbedMiddlewareEVMComponents
 
   let middleware: any
   let connectionId: string
   let mockConnection: any
   let mockStream: any
+  let evmRuleEngine: any
 
   beforeEach(() => {
     connectionId = 'test-connection-id'
@@ -31,7 +35,8 @@ describe('Challenge Response Middleware', () => {
     components = {
       registrar: stubInterface<Registrar>(),
       connectionManager: stubInterface<ConnectionManager>(),
-      logger: defaultLogger()
+      logger: defaultLogger(),
+      peerId: stubInterface<PeerId>()
     }
 
     // Create mock connection
@@ -40,7 +45,8 @@ describe('Challenge Response Middleware', () => {
       remotePeer: {
         toString: () => 'test-peer-id'
       },
-      newStream: sinon.stub()
+      newStream: sinon.stub(),
+      abort: sinon.stub()
     }
 
     // Set up connection manager to return our mock connection
@@ -56,13 +62,33 @@ describe('Challenge Response Middleware', () => {
     // Set up connection to return our mock stream
     mockConnection.newStream.resolves(mockStream)
 
+    const CHAIN_ID_0 = '31337'
+    const CHAIN_ID_0_ENDPOINT = 'http://127.0.0.1:8545'
+    const engineConfig: EngineConfig = {
+      networks: [
+        {
+          provider: new ethers.JsonRpcProvider(CHAIN_ID_0_ENDPOINT),
+          chainId: CHAIN_ID_0
+        }
+      ]
+    }
+
+    evmRuleEngine = new EVMRuleEngine(engineConfig)
+    evmRuleEngine.addRules([
+      addressIsEOA(engineConfig.networks, CHAIN_ID_0, {}),
+      walletBalance(engineConfig.networks, CHAIN_ID_0, {
+        value: ethers.parseEther('1'),
+        compareType: 'gte'
+      })
+    ])
+
     // Create provider
-    middleware = new MiddlewareChallengeResponse(components)
+    middleware = new MiddlewareEVM(components, { evmRuleEngine, signer: new Wallet(id('test')) })
   })
 
   describe('Middleware factory', () => {
     it('should create a middleware with the correct interface', () => {
-      expect(middleware[Symbol.toStringTag]).to.equal('@libp2p/middleware-challenge-response')
+      expect(middleware[Symbol.toStringTag]).to.equal('libp2p-middleware-evm')
       expect(middleware.decorate).to.be.a('function')
       expect(middleware.isDecorated).to.be.a('function')
       expect(middleware.start).to.be.a('function')
@@ -72,12 +98,12 @@ describe('Challenge Response Middleware', () => {
 
     it('should accept custom timeout option', () => {
       const customTimeout = TIMEOUT * 2
-      const mw = new MiddlewareChallengeResponse(components, { timeout: customTimeout })
+      const mw = new MiddlewareEVM(components, { timeout: customTimeout, evmRuleEngine, signer: new Wallet(id('test')) })
       expect(mw.timeout).to.equal(customTimeout)
     })
 
     it('should accept custom protocol prefix', () => {
-      const mw = new MiddlewareChallengeResponse(components, { protocolPrefix: 'custom' })
+      const mw = new MiddlewareEVM(components, { protocolPrefix: 'custom', evmRuleEngine, signer: new Wallet(id('test')) })
       expect(mw.protocol).to.contain('custom')
     })
   })
@@ -148,7 +174,7 @@ describe('Challenge Response Middleware', () => {
         expect(mockConnection.newStream.called).to.be.true()
       })
 
-      it('should send a challenge and wait for response using a duplex pair', async () => {
+      it('should send a challenge, wait for response and send OK using a duplex pair', async () => {
         // Create a duplex pair.
         const [clientStream, serverStream] = duplexPair<any>()
 
@@ -174,28 +200,25 @@ describe('Challenge Response Middleware', () => {
         const fakeConnection = {
           id: 'test-connection-id',
           remotePeer: { toString: () => 'test-peer-id' },
-          newStream: async (_protocol: string, _options?: any) => clientStream
+          newStream: async (_protocol: string, _options?: any) => clientStream,
+          abort: sinon.stub()
         }
 
         // Stub the connection manager to return the fake connection.
         middleware.components.connectionManager.getConnections = () => [fakeConnection]
 
-        // Simulate the server behavior concurrently.
+        // Simulate the server behavior.
         async function simulateServer (): Promise<void> {
           const lpServer = lpStream(serverStream)
-          const challenge = 'test-challenge'
-          // Server sends the challenge.
-          await lpServer.write(new TextEncoder().encode(challenge))
+          const wrappedRules = middleware.wrappedRulesToSign()
+          await lpServer.write(new TextEncoder().encode(wrappedRules))
           // Server reads the client's response.
           const res = await lpServer.read({ signal: AbortSignal.timeout(1000) })
+          const receivedSig = new TextDecoder().decode(res.slice())
+          verifyMessage(wrappedRules, receivedSig)
 
-          const response = new TextDecoder().decode(res.slice())
-          // Inline calculate the expected hash and send back "OK" if it matches.
-          if (response === await middleware.calculateSha256(challenge)) {
-            await lpServer.write(new TextEncoder().encode('OK'))
-          } else {
-            throw new Error('Invalid response')
-          }
+          // assume signature is OK and EVM rules passed
+          await lpServer.write(new TextEncoder().encode('OK'))
           await (serverStream as any).close()
         }
         // eslint-disable-next-line no-console
@@ -203,9 +226,8 @@ describe('Challenge Response Middleware', () => {
 
         // Run the client's decorate process.
         const result: boolean = await middleware.decorate('test-connection-id')
-        // expected hash is calculated in the simulateServer, so no need to store it here
 
-        expect(result).to.equal(true)
+        expect(result, 'result').to.equal(true)
         expect((clientStream as any).close.called).to.be.true()
       })
 

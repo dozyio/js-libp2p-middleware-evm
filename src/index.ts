@@ -6,9 +6,11 @@
  */
 
 import { type Middleware } from 'libp2p-middleware-registrar'
-import { MiddlewareChallengeResponse as MiddlewareChallengeResponseClass } from './middleware-challenge-response.js'
-import type { AbortOptions, ComponentLogger } from '@libp2p/interface'
+import { MiddlewareEVM as MiddlewareEVMClass } from './middleware-evm.js'
+import type { AbortOptions, ComponentLogger, PeerId } from '@libp2p/interface'
 import type { ConnectionManager, Registrar } from '@libp2p/interface-internal'
+import type { Wallet } from 'ethers'
+import type { EVMRuleEngine } from 'evm-rule-engine'
 
 export interface MiddlewareChallengeResponse {
   start(): Promise<void>
@@ -18,7 +20,7 @@ export interface MiddlewareChallengeResponse {
   isDecorated(connectionId: string): boolean
 }
 
-export interface MiddlewareChallengeResponseInit {
+export interface MiddlewareEVMInit {
   /**
    * How long to wait for challenge responses (in ms)
    */
@@ -39,17 +41,29 @@ export interface MiddlewareChallengeResponseInit {
    */
   maxOutboundStreams?: number
 
+  /**
+   * Run on limited connection - default: true
+   */
   runOnLimitedConnection?: boolean
+
+  /**
+   * A configured EVM rule engine
+   */
+  evmRuleEngine: EVMRuleEngine
+
+  /**
+   * Signer for EVM challenges
+   */
+  signer: Wallet
 }
 
-export interface MiddlewareChallengeResponseComponents {
+export interface MiddlewareEVMComponents {
   connectionManager: ConnectionManager
   registrar: Registrar
   logger: ComponentLogger
+  peerId: PeerId
 }
 
-export function middlewareChallengeResponse (init: MiddlewareChallengeResponseInit = {}): (components: MiddlewareChallengeResponseComponents) => Middleware {
-  return (components) => new MiddlewareChallengeResponseClass(components, init)
+export function middlewareEVM (init: MiddlewareEVMInit): (components: MiddlewareEVMComponents) => Middleware {
+  return (components) => new MiddlewareEVMClass(components, init)
 }
-
-export { CHALLENGE_RESPONSE_PROTOCOL } from './constants.js'

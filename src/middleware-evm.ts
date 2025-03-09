@@ -1,14 +1,23 @@
+import { isPeerId, type AbortOptions, type Connection, type Logger, type Startable, type Stream } from '@libp2p/interface'
+import { type Wallet, verifyMessage } from 'ethers'
+import { ruleDefinitionSchema, type EVMRuleEngine, type RuleDefinition } from 'evm-rule-engine'
 import { lpStream } from 'it-length-prefixed-stream'
-import { fromString } from 'uint8arrays/from-string'
-import { toString } from 'uint8arrays/to-string'
-import { CHALLENGE_RESPONSE_PROTOCOL, CHALLENGE_SIZE, MAX_INBOUND_STREAMS, MAX_OUTBOUND_STREAMS, PROTOCOL_NAME, PROTOCOL_PREFIX, PROTOCOL_VERSION, TIMEOUT } from './constants.js'
-import type { MiddlewareChallengeResponseComponents, MiddlewareChallengeResponseInit } from './index.js'
-import type { AbortOptions, Connection, Logger, Startable, Stream } from '@libp2p/interface'
+import { v7 as uuidv7 } from 'uuid'
+import { z } from 'zod'
+import { MAX_INBOUND_STREAMS, MAX_OUTBOUND_STREAMS, PROTOCOL_NAME, PROTOCOL_PREFIX, PROTOCOL_VERSION, TIMEOUT } from './constants.js'
+import type { MiddlewareEVMComponents, MiddlewareEVMInit } from './index.js'
 import type { Middleware } from 'libp2p-middleware-registrar'
 
-export class MiddlewareChallengeResponse implements Middleware, Startable {
+interface ToSign {
+  rules: RuleDefinition[]
+  timestamp: number
+  peerId: string
+  nonce: string
+}
+
+export class MiddlewareEVM implements Middleware, Startable {
   public readonly protocol: string
-  private readonly components: MiddlewareChallengeResponseComponents
+  private readonly components: MiddlewareEVMComponents
   private started: boolean
   public readonly timeout: number
   private readonly maxInboundStreams: number
@@ -16,22 +25,30 @@ export class MiddlewareChallengeResponse implements Middleware, Startable {
   private readonly runOnLimitedConnection: boolean
   private readonly log: Logger
   private readonly decoratedConnections: Set<string>
+  public evmRuleEngine: EVMRuleEngine
+  private readonly signer: Wallet
 
-  constructor (components: MiddlewareChallengeResponseComponents, init: MiddlewareChallengeResponseInit = {}) {
+  constructor (components: MiddlewareEVMComponents, init: MiddlewareEVMInit) {
     this.components = components
-    this.log = components.logger.forComponent('libp2p:middleware-challenge-response')
+    this.log = components.logger.forComponent('libp2p:middleware-evm')
     this.started = false
     this.protocol = `/${init.protocolPrefix ?? PROTOCOL_PREFIX}/${PROTOCOL_NAME}/${PROTOCOL_VERSION}`
     this.timeout = init.timeout ?? TIMEOUT
     this.maxInboundStreams = init.maxInboundStreams ?? MAX_INBOUND_STREAMS
     this.maxOutboundStreams = init.maxOutboundStreams ?? MAX_OUTBOUND_STREAMS
     this.runOnLimitedConnection = init.runOnLimitedConnection ?? true
+    this.signer = init.signer
+
+    if (init.evmRuleEngine == null) {
+      throw new Error('EVM engine required')
+    }
+    this.evmRuleEngine = init.evmRuleEngine
 
     this.decoratedConnections = new Set<string>()
     this.handle = this.handle.bind(this)
   }
 
-  readonly [Symbol.toStringTag] = '@libp2p/middleware-challenge-response'
+  readonly [Symbol.toStringTag] = 'libp2p-middleware-evm'
 
   async start (): Promise<void> {
     if (this.started) return
@@ -39,24 +56,24 @@ export class MiddlewareChallengeResponse implements Middleware, Startable {
     // Check if the protocol is already registered before trying to register it
     try {
       // Try to get existing handler first
-      this.components.registrar.getHandler(CHALLENGE_RESPONSE_PROTOCOL)
+      this.components.registrar.getHandler(this.protocol)
       // If we get here, the protocol is already registered
-      this.log(`Protocol ${CHALLENGE_RESPONSE_PROTOCOL} already registered, skipping`)
+      this.log(`Protocol ${this.protocol} already registered, skipping`)
     } catch (err: any) {
       // handle registering protocol
       if (err.name === 'UnhandledProtocolError') {
-        await this.components.registrar.handle(CHALLENGE_RESPONSE_PROTOCOL, this.handle, {
+        await this.components.registrar.handle(this.protocol, this.handle, {
           maxInboundStreams: this.maxInboundStreams,
           maxOutboundStreams: this.maxOutboundStreams,
           runOnLimitedConnection: this.runOnLimitedConnection
         })
-        this.log(`Registered handler for ${CHALLENGE_RESPONSE_PROTOCOL}`)
+        this.log(`Registered handler for ${this.protocol}`)
       } else {
         throw err
       }
     }
 
-    this.log(`Started challenge-response middleware with protocol ${CHALLENGE_RESPONSE_PROTOCOL}`)
+    this.log(`Started evm middleware with protocol ${this.protocol}`)
     this.started = true
   }
 
@@ -66,16 +83,16 @@ export class MiddlewareChallengeResponse implements Middleware, Startable {
     // Unregister the protocol handler
     try {
       // Make sure the protocol is registered before trying to unregister it
-      this.components.registrar.getHandler(CHALLENGE_RESPONSE_PROTOCOL)
-      await this.components.registrar.unhandle(CHALLENGE_RESPONSE_PROTOCOL)
-      this.log(`Unregistered handler for ${CHALLENGE_RESPONSE_PROTOCOL}`)
+      this.components.registrar.getHandler(this.protocol)
+      await this.components.registrar.unhandle(this.protocol)
+      this.log(`Unregistered handler for ${this.protocol}`)
     } catch (err: any) {
       // If it's an UnhandledProtocolError, the protocol is already unregistered
       if (err.name === 'UnhandledProtocolError') {
-        this.log(`Protocol ${CHALLENGE_RESPONSE_PROTOCOL} already unregistered, skipping`)
+        this.log(`Protocol ${this.protocol} already unregistered, skipping`)
       } else {
         // Unexpected error, log but don't throw (allow cleanup to continue)
-        this.log.error(`Error unregistering protocol ${CHALLENGE_RESPONSE_PROTOCOL}: ${err.message}`)
+        this.log.error(`Error unregistering protocol ${this.protocol}: ${err.message}`)
       }
     }
 
@@ -95,28 +112,32 @@ export class MiddlewareChallengeResponse implements Middleware, Startable {
     return this.decoratedConnections.has(connectionId)
   }
 
-  // Handle inbound challenge-response requests from clients
+  wrappedRulesToSign (): string {
+    const toSign: ToSign = {
+      rules: this.evmRuleEngine.getRuleDefinitions(),
+      timestamp: Date.now(),
+      peerId: this.components.peerId.toString(),
+      nonce: uuidv7()
+    }
+
+    return JSON.stringify(toSign)
+  }
+
+  // Handle inbound EVM challenge-response requests from clients
   handle ({ stream, connection }: { stream: Stream, connection: Connection }): void {
     this.log('Received middleware connection request', connection.id, connection.remotePeer.toString())
 
     Promise.resolve().then(async () => {
-    // Generate a random challenge to send to the client
-      const challenge = this.generateRandomString(CHALLENGE_SIZE)
-      this.log(`Generated challenge: [${challenge}] (length: ${challenge.length})`)
-
-      // Calculate the expected response we should receive (SHA-256 hash of challenge)
-      const expectedResponse = await this.calculateSha256(challenge)
-      this.log(`Expected response hash: ${expectedResponse}`)
-
       const lp = lpStream(stream)
 
+      const wrappedRules = this.wrappedRulesToSign()
       try {
-        this.log('Sending challenge to client')
-        await lp.write(new TextEncoder().encode(challenge), { signal: AbortSignal.timeout(this.timeout) })
-        this.log('Challenge sent successfully to client')
+        this.log('Sending EVM challenge to client')
+        await lp.write(new TextEncoder().encode(wrappedRules), { signal: AbortSignal.timeout(this.timeout) })
+        this.log('EVM Challenge sent successfully to client')
       } catch (err: any) {
-        this.log('Error sending challenge to client:', err.message)
-        stream.abort(new Error('Error sending challenge to client'))
+        this.log('Error sending EVM challenge to client:', err.message)
+        connection.abort(new Error('Error sending EVM challenge to client'))
         return
       }
 
@@ -125,14 +146,20 @@ export class MiddlewareChallengeResponse implements Middleware, Startable {
         const res = await lp.read({ signal: AbortSignal.timeout(this.timeout) })
         this.log('Read response', res)
 
-        if (new TextDecoder().decode(res.slice()) !== expectedResponse) {
-          this.log('Response does not match expected:', res, expectedResponse)
-          stream.abort(new Error('error response does not match expected'))
+        const responseSig = new TextDecoder().decode(res.slice())
+        const recoveredAddress = verifyMessage(wrappedRules, responseSig)
+
+        this.log('Recovered address:', recoveredAddress)
+
+        const evalRes = await this.evmRuleEngine.evaluate(recoveredAddress)
+        if (!evalRes.result) {
+          this.log('Failed EVM rule evaluation', evalRes)
+          connection.abort(new Error('Failed EVM rule evaluation'))
           return
         }
       } catch (err: any) {
         this.log('Error reading response:', err.message)
-        stream.abort(new Error('Error reading response'))
+        connection.abort(new Error('Error reading response'))
         return
       }
 
@@ -141,12 +168,11 @@ export class MiddlewareChallengeResponse implements Middleware, Startable {
         this.log(`Connection ${connection.id} middleware negotiated 
 successfully, sending OK`)
         await lp.write(new TextEncoder().encode('OK'), { signal: AbortSignal.timeout(this.timeout) })
-        this.log('Sent ok to client')
-        this.log('closing stream')
+        this.log('Sent OK to client, closing stream')
         await stream.close()
       } catch (err: any) {
         this.log('Error sending challenge to client:', err.message)
-        stream.abort(new Error('Error sending challenge to client'))
+        connection.abort(new Error('Error sending challenge to client'))
       }
     }).catch((err: any) => {
       this.log('Error handling request', err)
@@ -182,9 +208,9 @@ successfully, sending OK`)
     }
 
     try {
-      // Open a stream to the remote peer using the auth challenge protocol
-      this.log('Opening challenge-response stream to peer', connection.remotePeer.toString(), 'on protocol', CHALLENGE_RESPONSE_PROTOCOL)
-      const stream = await connection.newStream(CHALLENGE_RESPONSE_PROTOCOL, { signal: AbortSignal.timeout(this.timeout) })
+      // Open a stream to the remote peer using the EVM protocol
+      this.log('Opening EVM stream to peer', connection.remotePeer.toString(), 'on protocol', this.protocol)
+      const stream = await connection.newStream(this.protocol, { signal: AbortSignal.timeout(this.timeout) })
 
       const lp = lpStream(stream)
 
@@ -194,17 +220,53 @@ successfully, sending OK`)
         const challenge = new TextDecoder().decode(challengeBytes.slice())
         this.log(`Received challenge from server: [${challenge}] (length: ${challenge.length})`)
 
-        // Calculate the response (SHA-256 hash of the challenge)
-        const response = await this.calculateSha256(challenge)
-        this.log(`Calculated response hash: ${response}`)
+        const toSignSchema = z.object({
+          rules: z.array(ruleDefinitionSchema),
+          timestamp: z.number().refine(
+            (val) => {
+              const now = Date.now()
+              return Math.abs(now - val) <= 60000 // within 1 minute (60000 ms)
+            },
+            {
+              message: 'Timestamp must be within ±1 minute of the current time.'
+            }
+          ),
+          peerId: z.string().refine(
+            (val) => {
+              return val === connection.remotePeer.toString()
+            },
+            {
+              message: 'Peer ID must be a valid PeerId'
+            }
+          ),
+          nonce: z.string().uuid()
+        })
+
+        const validateRes = toSignSchema.safeParse(JSON.parse(challenge))
+        if (!validateRes.success) {
+          console.log(validateRes.error)
+          connection.abort(new Error('challenge failed validation'))
+          return false
+        }
+
+        const toSign = validateRes.data
+
+        if (!this.evmRuleEngine.validateRules(toSign.rules)) {
+          this.log('Error validation challenge')
+          connection.abort(new Error('Error validating challenge'))
+          return false
+        }
+
+        const sig = await this.signer.signMessage(challenge)
+        this.log(`Signed message : ${sig}`)
 
         // Send response to server
         try {
-          await lp.write(new TextEncoder().encode(response), { signal: AbortSignal.timeout(this.timeout) })
+          await lp.write(new TextEncoder().encode(sig), { signal: AbortSignal.timeout(this.timeout) })
           this.log('Response sent successfully to server')
         } catch (err: any) {
           this.log('Error sending response to server:', err.message)
-          stream.abort(new Error('Error sending response to server'))
+          connection.abort(new Error('Error sending response to server'))
           return false
         }
 
@@ -213,7 +275,7 @@ successfully, sending OK`)
           this.log('Read challenge ok')
           // eslint-disable-next-line max-depth
           if (new TextDecoder().decode(isOK.slice()) !== 'OK') {
-            stream.abort(new Error('reading challenge ok failed'))
+            connection.abort(new Error('reading challenge ok failed'))
             return false
           }
 
@@ -222,75 +284,19 @@ successfully, sending OK`)
           return true
         } catch (err: any) {
           this.log('Error reading response from server:', err.message)
-          stream.abort(new Error('Error reading response from server'))
+          connection.abort(new Error('Error reading response from server'))
           return false
         }
       } catch (err: any) {
         this.log('Error sending response to server:', err.message)
-        // Ensure stream is closed in case of error
-        if (stream != null) {
-          stream.abort(new Error('Error sending response to server'))
-          return false
-        }
+        connection.abort(new Error('Error sending response to server'))
+        return false
       }
     } catch (err: any) {
       // eslint-disable-next-line no-console
       this.log('Middleware error for connection', connectionId, err)
+      connection.abort(err)
       return false
     }
-
-    return false
-  }
-
-  /**
-   * Generate a random string of specified length
-   */
-  generateRandomString (length: number): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-    let result = ''
-
-    // Generate twice as many random bytes as needed to ensure good randomness
-    const randomValues = new Uint8Array(length * 2)
-
-    try {
-    // Try to use crypto.getRandomValues if available (browser or Node.js with webcrypto)
-      if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-        crypto.getRandomValues(randomValues)
-      } else {
-      // Fallback for environments without crypto
-        for (let i = 0; i < randomValues.length; i++) {
-          randomValues[i] = Math.floor(Math.random() * 256)
-        }
-      }
-    } catch (e) {
-    // Final fallback if crypto.getRandomValues throws an error
-    // eslint-disable-next-line no-console
-      console.warn('Crypto.getRandomValues failed, using Math.random fallback')
-      for (let i = 0; i < randomValues.length; i++) {
-        randomValues[i] = Math.floor(Math.random() * 256)
-      }
-    }
-
-    // Use only length bytes for the result
-    for (let i = 0; i < length; i++) {
-      result += chars.charAt(randomValues[i] % chars.length)
-    }
-
-    return result
-  }
-
-  /**
-   * Calculate SHA-256 hash of a string
-   */
-  async calculateSha256 (input: string): Promise<string> {
-  // Ensure input is properly encoded to bytes
-    const data = fromString(input, 'utf8')
-
-    // Use the Web Crypto API directly to calculate the SHA-256 hash
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-    const hashArray = new Uint8Array(hashBuffer)
-
-    // Convert to hex string with specific formatting
-    return toString(hashArray, 'hex')
   }
 }
