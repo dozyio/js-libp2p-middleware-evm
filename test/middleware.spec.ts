@@ -51,6 +51,7 @@ describe('Challenge Response Middleware', () => {
 
     // Set up connection manager to return our mock connection
     components.connectionManager.getConnections.returns([mockConnection])
+    components.peerId.toString.returns('test-peer-id')
 
     // Create mock stream for authentication
     mockStream = {
