@@ -8,7 +8,7 @@ An slightly contrived example of 2 js-libp2p peers using a EVM blockchain to
 validate that each peer is holding 1 Eth.
 
 The middleware is run after connection setup and encryption / multiplexing is
-negotiated but before another streams is setup. The middleware is mutual i.e.
+negotiated but before another stream is setup. The middleware is mutual i.e.
 both sides run middleware checks, so it should run twice per connection.
 
 If the middleware fails, i.e. a peer isn't holding 1 Eth, the connection closes.
@@ -40,17 +40,21 @@ const networks: Networks = [
 const engine = new EVMRuleEngine({ networks })
 
 const ruleDefinitions = [
-  { type: 'walletBalance', chainId: '31337', params: { value: ethers.parseEther('1'), compareType: 'gte' } },
+  {
+    type: 'walletBalance',
+    chainId: '31337',
+    params: {
+      value: ethers.parseEther('1'),
+      compareType: 'gte'
+    }
+  },
 ]
 
 const rules = createRulesFromDefinitions(networks, ruleDefinitions)
 engine.addRules(rules)
 
-console.log(engine.exportRulesAsJsonString())
-
-
 async function newNode(port: string, nickname: string) {
-let signer: Wallet
+  let signer: Wallet
   if (nickname === 'n1') {
     signer = new Wallet('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80')
   } else if (nickname === 'n2') {
@@ -100,7 +104,7 @@ Run anvil in a terminal window
 anvil --port 8545 --chain-id 31337
 ```
 
-Run the example with logging
+Run the example with logging (note: use node 23 to run typescript)
 ```sh
 DEBUG=* node evm.ts
 ```
