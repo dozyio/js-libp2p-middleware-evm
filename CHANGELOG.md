@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/dozyio/js-libp2p-middleware-evm/compare/v1.0.0...v1.0.1) (2025-03-11)
+
+### Trivial Changes
+
+* bump deps, remove unused interface ([661319d](https://github.com/dozyio/js-libp2p-middleware-evm/commit/661319dd9aec7fe5e9682a78233f5ef4f098697e))
+
 ## 1.0.0 (2025-03-09)
 
 ### Features
