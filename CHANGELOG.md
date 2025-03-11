@@ -1,3 +1,9 @@
+## [1.0.2](https://github.com/dozyio/js-libp2p-middleware-evm/compare/v1.0.1...v1.0.2) (2025-03-11)
+
+### Trivial Changes
+
+* bump deps ([0bab91d](https://github.com/dozyio/js-libp2p-middleware-evm/commit/0bab91d96f2c8bbfc53977a114cb07e026e5ec54))
+
 ## [1.0.1](https://github.com/dozyio/js-libp2p-middleware-evm/compare/v1.0.0...v1.0.1) (2025-03-11)
 
 ### Trivial Changes
