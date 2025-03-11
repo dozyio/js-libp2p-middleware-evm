@@ -1,4 +1,4 @@
-import { isPeerId, type AbortOptions, type Connection, type Logger, type Startable, type Stream } from '@libp2p/interface'
+import { type AbortOptions, type Connection, type Logger, type Startable, type Stream } from '@libp2p/interface'
 import { type Wallet, verifyMessage } from 'ethers'
 import { ruleDefinitionSchema, type EVMRuleEngine, type RuleDefinition } from 'evm-rule-engine'
 import { lpStream } from 'it-length-prefixed-stream'

@@ -7,18 +7,10 @@
 
 import { type Middleware } from 'libp2p-middleware-registrar'
 import { MiddlewareEVM as MiddlewareEVMClass } from './middleware-evm.js'
-import type { AbortOptions, ComponentLogger, PeerId } from '@libp2p/interface'
+import type { ComponentLogger, PeerId } from '@libp2p/interface'
 import type { ConnectionManager, Registrar } from '@libp2p/interface-internal'
 import type { Wallet } from 'ethers'
 import type { EVMRuleEngine } from 'evm-rule-engine'
-
-export interface MiddlewareChallengeResponse {
-  start(): Promise<void>
-  stop(): Promise<void>
-  isStarted(): boolean
-  decorate(connectionId: string, options?: AbortOptions): Promise<boolean>
-  isDecorated(connectionId: string): boolean
-}
 
 export interface MiddlewareEVMInit {
   /**
