@@ -23,7 +23,7 @@ interface StubbedMiddlewareEVMComponents {
 describe('Challenge Response Middleware', () => {
   let components: StubbedMiddlewareEVMComponents
 
-  let middleware: any
+  let middleware: MiddlewareEVM
   let connectionId: string
   let mockConnection: any
   let mockStream: any
@@ -124,11 +124,11 @@ describe('Challenge Response Middleware', () => {
     })
 
     it('should return false for isDecorated', async () => {
-      expect(middleware.isDecorated(connectionId)).to.be.false()
+      expect(middleware.isDecorated(mockConnection)).to.be.false()
     })
 
     it('should return false for decorate when not started', async () => {
-      const result = await middleware.decorate(connectionId)
+      const result = await middleware.decorate(mockStream, mockConnection)
       expect(result).to.be.false()
     })
 
@@ -166,7 +166,7 @@ describe('Challenge Response Middleware', () => {
         }
 
         // Start authentication process
-        const authPromise = middleware.decorate(connectionId)
+        const authPromise = middleware.decorate(mockStream, mockConnection)
 
         // Wait for the promise to resolve
         await authPromise
@@ -206,7 +206,7 @@ describe('Challenge Response Middleware', () => {
         }
 
         // Stub the connection manager to return the fake connection.
-        middleware.components.connectionManager.getConnections = () => [fakeConnection]
+        ;(middleware as any).components.connectionManager.getConnections = () => [fakeConnection]
 
         // Simulate the server behavior.
         async function simulateServer (): Promise<void> {
@@ -222,11 +222,14 @@ describe('Challenge Response Middleware', () => {
           await lpServer.write(new TextEncoder().encode('OK'))
           await (serverStream as any).close()
         }
+
+        mockConnection.newStream = sinon.stub().resolves(clientStream)
+
         // eslint-disable-next-line no-console
         simulateServer().catch(err => { console.error('simulateServer error:', err) })
 
         // Run the client's decorate process.
-        const result: boolean = await middleware.decorate('test-connection-id')
+        const result: boolean = await middleware.decorate(mockStream, mockConnection)
 
         expect(result, 'result').to.equal(true)
         expect((clientStream as any).close.called).to.be.true()
@@ -234,7 +237,7 @@ describe('Challenge Response Middleware', () => {
 
       it('should have a working isDecorated function', () => {
         // Initially, connection is not decorated
-        expect(middleware.isDecorated(connectionId)).to.be.false()
+        expect(middleware.isDecorated(mockConnection)).to.be.false()
       })
     })
   })

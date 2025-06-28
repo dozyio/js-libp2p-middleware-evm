@@ -24,7 +24,7 @@ export class MiddlewareEVM implements Startable {
   private readonly maxOutboundStreams: number
   private readonly runOnLimitedConnection: boolean
   private readonly log: Logger
-  private readonly authenticatedConnections: Set<string>
+  private readonly decoratedConnections: Set<string>
   public evmRuleEngine: EVMRuleEngine
   private readonly signer: Wallet
 
@@ -44,7 +44,7 @@ export class MiddlewareEVM implements Startable {
     }
     this.evmRuleEngine = init.evmRuleEngine
 
-    this.authenticatedConnections = new Set<string>()
+    this.decoratedConnections = new Set<string>()
     this.handle = this.handle.bind(this)
     this.handler = this.handler.bind(this)
   }
@@ -97,7 +97,7 @@ export class MiddlewareEVM implements Startable {
       }
     }
 
-    this.authenticatedConnections.clear()
+    this.decoratedConnections.clear()
     this.started = false
 
     this.log('Stopped evm middleware')
@@ -107,10 +107,10 @@ export class MiddlewareEVM implements Startable {
     return this.started
   }
 
-  isAuthenticated (connection: Connection): boolean {
+  isDecorated (connection: Connection): boolean {
     if (!this.started) return false
 
-    return this.authenticatedConnections.has(connection.id)
+    return this.decoratedConnections.has(connection.id)
   }
 
   wrappedRulesToSign (): string {
@@ -178,7 +178,7 @@ export class MiddlewareEVM implements Startable {
       }
 
       try {
-        this.authenticatedConnections.add(connection.id)
+        this.decoratedConnections.add(connection.id)
         this.log(`Connection ${connection.id} middleware negotiated successfully, sending OK`)
         await lp.write(new TextEncoder().encode('OK'), { signal: AbortSignal.timeout(this.timeout) })
         this.log('Sent OK to client, closing stream')
@@ -194,8 +194,7 @@ export class MiddlewareEVM implements Startable {
 
   // Authentication methods
   public async decorate (stream: Stream, connection: Connection, abortOptions?: AbortOptions): Promise<boolean> {
-    this.log('decorate')
-    this.log('decorate attempt for connection:', connection.id)
+    this.log.trace('Decorate attempt for connection:', connection.id)
 
     if (!this.started) {
       this.log.error('middleware not started')
@@ -203,7 +202,7 @@ export class MiddlewareEVM implements Startable {
     }
 
     // If already authenticated, return true
-    if (this.authenticatedConnections.has(connection.id)) {
+    if (this.isDecorated(connection)) {
       this.log('Connection middleware already applied:', connection.id)
       return true
     }
@@ -215,9 +214,9 @@ export class MiddlewareEVM implements Startable {
     try {
       // Open a stream to the remote peer using the EVM protocol
       this.log('Opening EVM stream to peer', connection.remotePeer.toString(), 'on protocol', this.protocol)
-      const stream = await connection.newStream(this.protocol, { signal: AbortSignal.timeout(this.timeout) })
+      const authStream = await connection.newStream(this.protocol, { signal: AbortSignal.timeout(this.timeout) })
 
-      const lp = lpStream(stream)
+      const lp = lpStream(authStream)
 
       try {
         this.log('Waiting to receive challenge from server...')
@@ -285,8 +284,8 @@ export class MiddlewareEVM implements Startable {
             return false
           }
 
-          this.authenticatedConnections.add(connection.id)
-          // await stream.close()
+          this.decoratedConnections.add(connection.id)
+          await authStream.close()
           return true
         } catch (err: any) {
           this.log.error('Error reading response from server:', err.message)
