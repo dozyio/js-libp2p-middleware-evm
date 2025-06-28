@@ -1,3 +1,10 @@
+## [1.0.3](https://github.com/dozyio/js-libp2p-middleware-evm/compare/v1.0.2...v1.0.3) (2025-06-28)
+
+### Trivial Changes
+
+* remove dead code ([032341c](https://github.com/dozyio/js-libp2p-middleware-evm/commit/032341cf885aaf120805242fbfb51d3947932e7e))
+* update for new pr ([f708c39](https://github.com/dozyio/js-libp2p-middleware-evm/commit/f708c391f8a69b9d36af4d7d119577c3f9b66d35))
+
 ## [1.0.2](https://github.com/dozyio/js-libp2p-middleware-evm/compare/v1.0.1...v1.0.2) (2025-03-11)
 
 ### Trivial Changes
