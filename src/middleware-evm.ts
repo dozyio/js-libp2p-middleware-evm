@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { type AbortOptions, type Connection, type Logger, type Startable, type Stream } from '@libp2p/interface'
 import { type Wallet, verifyMessage } from 'ethers'
 import { ruleDefinitionSchema, type EVMRuleEngine, type RuleDefinition } from 'evm-rule-engine'
@@ -6,7 +7,6 @@ import { v7 as uuidv7 } from 'uuid'
 import { z } from 'zod'
 import { MAX_INBOUND_STREAMS, MAX_OUTBOUND_STREAMS, PROTOCOL_NAME, PROTOCOL_PREFIX, PROTOCOL_VERSION, TIMEOUT } from './constants.js'
 import type { MiddlewareEVMComponents, MiddlewareEVMInit } from './index.js'
-import type { Middleware } from 'libp2p-middleware-registrar'
 
 interface ToSign {
   rules: RuleDefinition[]
@@ -15,7 +15,7 @@ interface ToSign {
   nonce: string
 }
 
-export class MiddlewareEVM implements Middleware, Startable {
+export class MiddlewareEVM implements Startable {
   public readonly protocol: string
   private readonly components: MiddlewareEVMComponents
   private started: boolean
@@ -24,7 +24,7 @@ export class MiddlewareEVM implements Middleware, Startable {
   private readonly maxOutboundStreams: number
   private readonly runOnLimitedConnection: boolean
   private readonly log: Logger
-  private readonly decoratedConnections: Set<string>
+  private readonly authenticatedConnections: Set<string>
   public evmRuleEngine: EVMRuleEngine
   private readonly signer: Wallet
 
@@ -44,8 +44,9 @@ export class MiddlewareEVM implements Middleware, Startable {
     }
     this.evmRuleEngine = init.evmRuleEngine
 
-    this.decoratedConnections = new Set<string>()
+    this.authenticatedConnections = new Set<string>()
     this.handle = this.handle.bind(this)
+    this.handler = this.handler.bind(this)
   }
 
   readonly [Symbol.toStringTag] = 'libp2p-middleware-evm'
@@ -62,7 +63,7 @@ export class MiddlewareEVM implements Middleware, Startable {
     } catch (err: any) {
       // handle registering protocol
       if (err.name === 'UnhandledProtocolError') {
-        await this.components.registrar.handle(this.protocol, this.handle, {
+        await this.components.registrar.handle(this.protocol, this.handler, {
           maxInboundStreams: this.maxInboundStreams,
           maxOutboundStreams: this.maxOutboundStreams,
           runOnLimitedConnection: this.runOnLimitedConnection
@@ -96,20 +97,20 @@ export class MiddlewareEVM implements Middleware, Startable {
       }
     }
 
-    this.decoratedConnections.clear()
+    this.authenticatedConnections.clear()
     this.started = false
 
-    this.log('Stopped middleware')
+    this.log('Stopped evm middleware')
   }
 
   isStarted (): boolean {
     return this.started
   }
 
-  isDecorated (connectionId: string): boolean {
+  isAuthenticated (connection: Connection): boolean {
     if (!this.started) return false
 
-    return this.decoratedConnections.has(connectionId)
+    return this.authenticatedConnections.has(connection.id)
   }
 
   wrappedRulesToSign (): string {
@@ -123,20 +124,33 @@ export class MiddlewareEVM implements Middleware, Startable {
     return JSON.stringify(toSign)
   }
 
-  // Handle inbound EVM challenge-response requests from clients
-  handle ({ stream, connection }: { stream: Stream, connection: Connection }): void {
-    this.log('Received middleware connection request', connection.id, connection.remotePeer.toString())
+  handler ({ stream, connection }: { stream: Stream, connection: Connection }): void {
+    try {
+      const promise = this.handle(stream, connection)
+      promise.catch(err => {
+        this.log('Error handling request', err)
+      })
+    } catch (err) {
+      this.log('Synchronous error in handler', err)
+    }
+  }
 
-    Promise.resolve().then(async () => {
+  // Handle inbound EVM challenge-response requests from clients
+  public async handle (stream: Stream, connection: Connection): Promise<void> {
+    this.log('Received evm middleware connection request', connection.id, connection.remotePeer.toString())
+
+    try {
       const lp = lpStream(stream)
+      this.log('created lpstream')
 
       const wrappedRules = this.wrappedRulesToSign()
+      this.log('ping2: wrappedRules', wrappedRules)
       try {
         this.log('Sending EVM challenge to client')
         await lp.write(new TextEncoder().encode(wrappedRules), { signal: AbortSignal.timeout(this.timeout) })
         this.log('EVM Challenge sent successfully to client')
       } catch (err: any) {
-        this.log('Error sending EVM challenge to client:', err.message)
+        this.log.error('Error sending EVM challenge to client:', err.message)
         connection.abort(new Error('Error sending EVM challenge to client'))
         return
       }
@@ -158,61 +172,63 @@ export class MiddlewareEVM implements Middleware, Startable {
           return
         }
       } catch (err: any) {
-        this.log('Error reading response:', err.message)
+        this.log.error('Error reading response:', err.message)
         connection.abort(new Error('Error reading response'))
         return
       }
 
       try {
-        this.decoratedConnections.add(connection.id)
-        this.log(`Connection ${connection.id} middleware negotiated 
-successfully, sending OK`)
+        this.authenticatedConnections.add(connection.id)
+        this.log(`Connection ${connection.id} middleware negotiated successfully, sending OK`)
         await lp.write(new TextEncoder().encode('OK'), { signal: AbortSignal.timeout(this.timeout) })
         this.log('Sent OK to client, closing stream')
-        await stream.close()
+        // await stream.close()
       } catch (err: any) {
-        this.log('Error sending challenge to client:', err.message)
+        this.log.error('Error sending challenge to client:', err.message)
         connection.abort(new Error('Error sending challenge to client'))
       }
-    }).catch((err: any) => {
-      this.log('Error handling request', err)
-    })
+    } catch (err: any) {
+      this.log.error('Error handling request', err)
+    }
   }
 
   // Authentication methods
-  async decorate (connectionId: string, abortOptions?: AbortOptions): Promise<boolean> {
-    this.log('attempt for connection:', connectionId)
+  public async decorate (stream: Stream, connection: Connection, abortOptions?: AbortOptions): Promise<boolean> {
+    this.log('decorate')
+    this.log('decorate attempt for connection:', connection.id)
 
     if (!this.started) {
-      this.log('middleware not started')
+      this.log.error('middleware not started')
       return false
     }
 
     // If already authenticated, return true
-    if (this.decoratedConnections.has(connectionId)) {
-      this.log('Connection middleware already applied:', connectionId)
+    if (this.authenticatedConnections.has(connection.id)) {
+      this.log('Connection middleware already applied:', connection.id)
       return true
     }
 
     // We're going to initiate middleware with the server
     // The server will send us a challenge that we need to respond to
-    this.log(`Initiating middleware for connection ${connectionId}`)
+    this.log(`Initiating middleware for connection ${connection.id}`)
 
-    const connections = this.components.connectionManager.getConnections()
-    this.log('Looking for connection', connectionId, 'among', connections.length, 'connections')
-
-    const connection = connections.find((conn: Connection) => conn.id === connectionId)
-    if (connection == null) {
-      this.log('Connection', connectionId, 'not found')
-      return false
-    }
+    // const connections = this.components.connectionManager.getConnections()
+    // this.log('Looking for connection', connection.id, 'among', connections.length, 'connections')
+    //
+    // const connection = connections.find((conn: Connection) => conn.id === connection.id)
+    // if (connection == null) {
+    //   this.log('Connection', connection.id, 'not found')
+    //   return false
+    // }
 
     try {
       // Open a stream to the remote peer using the EVM protocol
       this.log('Opening EVM stream to peer', connection.remotePeer.toString(), 'on protocol', this.protocol)
       const stream = await connection.newStream(this.protocol, { signal: AbortSignal.timeout(this.timeout) })
 
+      this.log('decorate creating lpstream')
       const lp = lpStream(stream)
+      this.log('decorate created lpstream')
 
       try {
         this.log('Waiting to receive challenge from server...')
@@ -244,7 +260,7 @@ successfully, sending OK`)
 
         const validateRes = toSignSchema.safeParse(JSON.parse(challenge))
         if (!validateRes.success) {
-          console.log(validateRes.error)
+          this.log.error(validateRes.error)
           connection.abort(new Error('challenge failed validation'))
           return false
         }
@@ -252,7 +268,7 @@ successfully, sending OK`)
         const toSign = validateRes.data
 
         if (!this.evmRuleEngine.validateRules(toSign.rules)) {
-          this.log('Error validation challenge')
+          this.log.error('Error validation challenge')
           connection.abort(new Error('Error validating challenge'))
           return false
         }
@@ -265,7 +281,7 @@ successfully, sending OK`)
           await lp.write(new TextEncoder().encode(sig), { signal: AbortSignal.timeout(this.timeout) })
           this.log('Response sent successfully to server')
         } catch (err: any) {
-          this.log('Error sending response to server:', err.message)
+          this.log.error('Error sending response to server:', err.message)
           connection.abort(new Error('Error sending response to server'))
           return false
         }
@@ -275,26 +291,27 @@ successfully, sending OK`)
           this.log('Read challenge ok')
           // eslint-disable-next-line max-depth
           if (new TextDecoder().decode(isOK.slice()) !== 'OK') {
+            this.log.error('reading challenge ok failed')
             connection.abort(new Error('reading challenge ok failed'))
             return false
           }
 
-          this.decoratedConnections.add(connectionId)
-          await stream.close()
+          this.authenticatedConnections.add(connection.id)
+          // await stream.close()
           return true
         } catch (err: any) {
-          this.log('Error reading response from server:', err.message)
+          this.log.error('Error reading response from server:', err.message)
           connection.abort(new Error('Error reading response from server'))
           return false
         }
       } catch (err: any) {
-        this.log('Error sending response to server:', err.message)
+        this.log.error('Error sending response to server:', err.message)
         connection.abort(new Error('Error sending response to server'))
         return false
       }
     } catch (err: any) {
       // eslint-disable-next-line no-console
-      this.log('Middleware error for connection', connectionId, err)
+      this.log.error('Middleware error for connection', connection.id, err)
       connection.abort(err)
       return false
     }
