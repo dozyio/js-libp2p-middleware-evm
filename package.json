@@ -148,23 +148,21 @@
     "release": "aegir release"
   },
   "dependencies": {
-    "@libp2p/crypto": "^5.1.7",
     "@libp2p/interface": "^2.10.5",
     "@libp2p/interface-internal": "^2.3.18",
-    "@libp2p/logger": "^5.1.21",
     "ethers": "^6.14.4",
     "evm-rule-engine": "^0.3.3",
-    "libp2p-middleware-registrar": "^1.1.1",
-    "uint8arrays": "^5.1.0",
     "it-length-prefixed-stream": "^2.0.3",
     "uuid": "^11.1.0",
     "zod": "^3.25.67"
   },
   "devDependencies": {
+    "@libp2p/logger": "^5.1.21",
     "@types/sinon": "^17.0.4",
     "aegir": "^45.1.1",
     "it-pair": "^2.0.6",
     "sinon": "^21.0.0",
-    "sinon-ts": "^2.0.0"
+    "sinon-ts": "^2.0.0",
+    "uint8arrays": "^5.1.0"
   }
 }
