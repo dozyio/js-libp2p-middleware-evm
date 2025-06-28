@@ -154,9 +154,9 @@
     "@libp2p/logger": "^5.1.21",
     "ethers": "^6.14.4",
     "evm-rule-engine": "^0.3.3",
-    "it-length-prefixed-stream": "^2.0.3",
     "libp2p-middleware-registrar": "^1.1.1",
     "uint8arrays": "^5.1.0",
+    "it-length-prefixed-stream": "^2.0.3",
     "uuid": "^11.1.0",
     "zod": "^3.25.67"
   },
