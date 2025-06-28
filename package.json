@@ -1,6 +1,6 @@
 {
   "name": "libp2p-middleware-evm",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "EVM middleware for libp2p",
   "license": "Apache-2.0 OR MIT",
   "homepage": "https://github.com/dozyio/js-libp2p-middleware-evm#readme",

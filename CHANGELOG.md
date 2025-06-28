@@ -1,3 +1,9 @@
+## [1.0.6](https://github.com/dozyio/js-libp2p-middleware-evm/compare/v1.0.5...v1.0.6) (2025-06-28)
+
+### Trivial Changes
+
+* clean deps, move some to devdeps ([5ba0038](https://github.com/dozyio/js-libp2p-middleware-evm/commit/5ba0038fe3dda95686b8695668f42eb8d8610618))
+
 ## [1.0.5](https://github.com/dozyio/js-libp2p-middleware-evm/compare/v1.0.4...v1.0.5) (2025-06-28)
 
 ### Trivial Changes
