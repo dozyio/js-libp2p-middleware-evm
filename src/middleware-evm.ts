@@ -212,23 +212,12 @@ export class MiddlewareEVM implements Startable {
     // The server will send us a challenge that we need to respond to
     this.log(`Initiating middleware for connection ${connection.id}`)
 
-    // const connections = this.components.connectionManager.getConnections()
-    // this.log('Looking for connection', connection.id, 'among', connections.length, 'connections')
-    //
-    // const connection = connections.find((conn: Connection) => conn.id === connection.id)
-    // if (connection == null) {
-    //   this.log('Connection', connection.id, 'not found')
-    //   return false
-    // }
-
     try {
       // Open a stream to the remote peer using the EVM protocol
       this.log('Opening EVM stream to peer', connection.remotePeer.toString(), 'on protocol', this.protocol)
       const stream = await connection.newStream(this.protocol, { signal: AbortSignal.timeout(this.timeout) })
 
-      this.log('decorate creating lpstream')
       const lp = lpStream(stream)
-      this.log('decorate created lpstream')
 
       try {
         this.log('Waiting to receive challenge from server...')
