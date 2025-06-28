@@ -5,7 +5,6 @@
  * authentication protocol for libp2p protocol middleware.
  */
 
-import { type Middleware } from 'libp2p-middleware-registrar'
 import { MiddlewareEVM as MiddlewareEVMClass } from './middleware-evm.js'
 import type { ComponentLogger, PeerId } from '@libp2p/interface'
 import type { ConnectionManager, Registrar } from '@libp2p/interface-internal'
@@ -51,11 +50,11 @@ export interface MiddlewareEVMInit {
 
 export interface MiddlewareEVMComponents {
   connectionManager: ConnectionManager
-  registrar: Registrar
   logger: ComponentLogger
+  registrar: Registrar
   peerId: PeerId
 }
 
-export function middlewareEVM (init: MiddlewareEVMInit): (components: MiddlewareEVMComponents) => Middleware {
+export function middlewareEVM (init: MiddlewareEVMInit): (components: MiddlewareEVMComponents) => MiddlewareEVMClass {
   return (components) => new MiddlewareEVMClass(components, init)
 }
