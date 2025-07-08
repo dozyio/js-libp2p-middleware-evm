@@ -159,7 +159,7 @@
   "devDependencies": {
     "@libp2p/logger": "^5.1.21",
     "@types/sinon": "^17.0.4",
-    "aegir": "^45.1.1",
+    "aegir": "^47.0.20",
     "it-pair": "^2.0.6",
     "sinon": "^21.0.0",
     "sinon-ts": "^2.0.0",
