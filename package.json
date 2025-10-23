@@ -157,7 +157,7 @@
     "zod": "^3.25.67"
   },
   "devDependencies": {
-    "@libp2p/logger": "^5.1.21",
+    "@libp2p/logger": "^6.1.0",
     "@types/sinon": "^17.0.4",
     "aegir": "^45.1.1",
     "it-pair": "^2.0.6",
